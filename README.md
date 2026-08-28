@@ -58,7 +58,8 @@ iTerm2's bundle lets the request through.
 
 ## When it prompts
 
-Restore is offered **once per iTerm2 instance**, keyed on iTerm2's pid:
+Restore is offered **once per iTerm2 instance**, keyed on iTerm2's pid (or, if
+`ps` cannot be read, on the mtime of iTerm2's API socket):
 
 - installing while you are working adopts the running instance and stays quiet
 - a daemon restart against the same iTerm2 never re-prompts
@@ -68,6 +69,12 @@ Restore is offered **once per iTerm2 instance**, keyed on iTerm2's pid:
 Window counts are deliberately not used as a freshness signal. After a reboot
 iTerm2 often reopens windows of its own, and requiring a single empty window
 would suppress the prompt in exactly the case that matters.
+
+The decision is made **after** connecting, never before. At login launchd
+normally starts the agent before iTerm2 exists, so a pid read up front is
+`None`; deciding then would disable restore for the whole session. Identifying
+the instance also retries, because at boot the load average can be high enough
+that a single `ps` times out.
 
 The prompt is also skipped when the snapshot is older than `stale_days` (7) or
 is trivial (a single pane in `$HOME` with nothing running). Set
