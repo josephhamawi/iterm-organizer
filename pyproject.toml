@@ -1,0 +1,19 @@
+[project]
+name = "iterm-organizer"
+version = "1.0.0"
+description = "Snapshot and restore iTerm2 sessions across crashes and restarts"
+requires-python = ">=3.11"
+
+[project.scripts]
+iterm-organizer = "iterm_organizer.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
