@@ -21,18 +21,27 @@ fi
 
 # 2. AutoLaunch shim. iTerm2 starts this and injects an auth cookie, so no
 #    connection-permission dialog appears.
-cat > "$AUTOLAUNCH/iterm_organizer.py" <<PY
+cat > "$AUTOLAUNCH/iterm_organizer.py" <<SHIM
 #!/usr/bin/env python3
 """iTerm2 AutoLaunch shim for iterm-organizer. Real code lives in the repo."""
 import os
 import sys
 
-sys.path.insert(0, os.path.expanduser("$REPO/src"))
+REPO = os.path.expanduser("$REPO")
+VENV = os.path.join(REPO, ".venv", "bin", "python3")
+
+# iTerm2 runs this under its own bundled Python. If that interpreter predates
+# tomllib, re-exec into the repo venv: it inherits ITERM2_COOKIE and
+# ITERM2_KEY from the environment, so it still connects without a dialog.
+if sys.version_info < (3, 11) and os.path.exists(VENV):
+    os.execv(VENV, [VENV, os.path.abspath(__file__)])
+
+sys.path.insert(0, os.path.join(REPO, "src"))
 
 from iterm_organizer.autolaunch import run
 
 run()
-PY
+SHIM
 echo "wrote $AUTOLAUNCH/iterm_organizer.py"
 
 # 3. CLI wrapper, using the repo venv if one exists.

@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field
+
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - depends on the interpreter
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]
 
 DEFAULT_AUTORUN = [
     r"^npm run (dev|start|watch)\b",
@@ -100,6 +107,15 @@ def load_config(path: str | None = None) -> Config:
     path = os.path.expanduser(path or DEFAULT_PATH)
     if not os.path.exists(path):
         return Config()
+    if tomllib is None:
+        # iTerm2's bundled Python may predate tomllib. Report it rather than
+        # dying on import: the autolaunch entry point downgrades a ConfigError
+        # to defaults, and capturing snapshots matters more than a custom
+        # job list.
+        raise ConfigError(
+            "no TOML parser available (needs Python 3.11+ or the tomli "
+            f"package), so {path} was ignored"
+        )
     try:
         with open(path, "rb") as fh:
             data = tomllib.load(fh)

@@ -79,3 +79,22 @@ def test_default_config_text_parses_back_to_defaults(tmp_path):
     cfg = load_config(str(path))
     assert cfg.autorun == DEFAULT_AUTORUN
     assert cfg.snapshot_interval == 60
+
+
+def test_missing_toml_parser_is_reported_not_crashed(tmp_path, monkeypatch):
+    """iTerm2's bundled Python may predate tomllib; the daemon must still run."""
+    import iterm_organizer.config as config_mod
+
+    path = tmp_path / "c.toml"
+    path.write_text("snapshot_interval = 30\n")
+    monkeypatch.setattr(config_mod, "tomllib", None)
+    with pytest.raises(ConfigError, match="no TOML parser available"):
+        config_mod.load_config(str(path))
+
+
+def test_missing_toml_parser_still_allows_defaults(tmp_path, monkeypatch):
+    import iterm_organizer.config as config_mod
+
+    monkeypatch.setattr(config_mod, "tomllib", None)
+    cfg = config_mod.load_config(str(tmp_path / "absent.toml"))
+    assert cfg.snapshot_interval == 60

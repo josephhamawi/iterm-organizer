@@ -36,6 +36,9 @@ runtime; accept it. After that the organizer starts automatically with iTerm2.
 
 `./uninstall.sh` removes the shim and the CLI. Snapshots and config stay put.
 
+The shim re-execs into the repo venv if iTerm2's bundled Python predates 3.11
+(no `tomllib`). It inherits iTerm2's auth cookie either way, so no dialog appears.
+
 ## Everyday use
 
 ```bash
