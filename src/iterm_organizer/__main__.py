@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import model, plan as plan_mod
+from . import agent, model, plan as plan_mod
 from .config import ConfigError, load_config
 from .model import Store
 
@@ -130,6 +130,48 @@ def cmd_restore(store: Store, path: str | None) -> int:
     return status["code"]
 
 
+def cmd_status(store: Store) -> int:
+    print(agent.describe_status(agent.status(store)))
+    return 0
+
+
+def cmd_install(store: Store, program: str) -> int:
+    agent.install(program, store)
+    print(f"agent installed and started ({program})")
+    return 0
+
+
+def cmd_uninstall() -> int:
+    agent.uninstall()
+    print("agent stopped and removed; snapshots and config kept")
+    return 0
+
+
+def cmd_app(store: Store, program: str) -> int:
+    """Opened from Finder: make sure the agent is running, then report."""
+    title = "iTerm Organizer"
+    try:
+        agent.install(program, store)
+    except Exception as exc:  # noqa: BLE001
+        agent.alert(title, f"Could not start the background agent.\n\n{exc}")
+        return 1
+    info = agent.status(store)
+    agent.alert(
+        title,
+        "iTerm Organizer is set up and running in the background.\n\n"
+        + agent.describe_status(info)
+        + "\n\nIt saves your windows every 60 seconds and offers to bring "
+        "them back the next time iTerm2 starts.",
+    )
+    return 0
+
+
+def cmd_daemon() -> int:
+    from . import supervisor
+
+    return supervisor.run()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="iterm-organizer",
@@ -151,12 +193,35 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FILE",
         help="restore now, optionally from a specific snapshot file",
     )
+    group.add_argument("--status", action="store_true", help="is the agent running?")
+    group.add_argument(
+        "--install", metavar="PROGRAM", help="install and start the launchd agent"
+    )
+    group.add_argument(
+        "--uninstall", action="store_true", help="stop and remove the launchd agent"
+    )
+    group.add_argument(
+        "--app", metavar="PROGRAM", help=argparse.SUPPRESS  # Finder double-click
+    )
+    group.add_argument(
+        "--daemon", action="store_true", help=argparse.SUPPRESS  # run by launchd
+    )
     parser.add_argument(
         "--from", dest="source", default=None, help="snapshot file for --dry-run"
     )
     args = parser.parse_args(argv)
 
     store = Store(args.store) if args.store else Store()
+    if args.daemon:
+        return cmd_daemon()
+    if args.app:
+        return cmd_app(store, args.app)
+    if args.install:
+        return cmd_install(store, args.install)
+    if args.uninstall:
+        return cmd_uninstall()
+    if args.status:
+        return cmd_status(store)
     if args.list:
         return cmd_list(store)
     if args.dry_run:

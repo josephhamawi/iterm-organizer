@@ -15,7 +15,21 @@ terminal along with the memory of what you were doing.
 - Long-running dev processes, under an allowlist
 - Claude Code sessions, resumed with `claude --continue`
 
-## Install
+## Two ways to install
+
+**As an app** (what most people want):
+
+```bash
+./build-app.sh                 # builds ~/Development/iTermOrganizer
+```
+
+Then double-click `Install.command` in that folder, or run
+`"iTerm Organizer.app/Contents/MacOS/iTermOrganizer" --install`. The bundle
+carries its own copy of the code and dependencies and uses any Python 3.11+ on
+the machine. End-user documentation is generated alongside it from
+`docs/app/`.
+
+**From this checkout** (development):
 
 ```bash
 cd ~/Development/iterm-organizer

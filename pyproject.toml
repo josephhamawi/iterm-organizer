@@ -1,6 +1,6 @@
 [project]
 name = "iterm-organizer"
-version = "1.0.0"
+version = "1.1.0"
 description = "Snapshot and restore iTerm2 sessions across crashes and restarts"
 requires-python = ">=3.11"
 
