@@ -108,10 +108,10 @@ def load_config(path: str | None = None) -> Config:
     if not os.path.exists(path):
         return Config()
     if tomllib is None:
-        # iTerm2's bundled Python may predate tomllib. Report it rather than
-        # dying on import: the autolaunch entry point downgrades a ConfigError
-        # to defaults, and capturing snapshots matters more than a custom
-        # job list.
+        # The app launcher requires Python 3.11+, but the package can also be
+        # run against an older interpreter directly. Report it rather than
+        # dying on import: the supervisor downgrades a ConfigError to defaults,
+        # and capturing snapshots matters more than a custom job list.
         raise ConfigError(
             "no TOML parser available (needs Python 3.11+ or the tomli "
             f"package), so {path} was ignored"
