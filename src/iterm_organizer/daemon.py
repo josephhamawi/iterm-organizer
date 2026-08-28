@@ -391,7 +391,12 @@ async def capture_loop(connection, store: Store, config: Config, gate: asyncio.E
             log.error("capture failed: %s", exc)
 
 
-async def main(connection, store: Store | None = None, config: Config | None = None):
+async def main(
+    connection,
+    store: Store | None = None,
+    config: Config | None = None,
+    allow_restore: bool = True,
+):
     store = store or Store()
     store.ensure()
     if config is None:
@@ -406,7 +411,11 @@ async def main(connection, store: Store | None = None, config: Config | None = N
     if note:
         log.warning(note)
 
-    if plan_mod.should_prompt(snapshot, config) and await _launch_is_fresh(connection):
+    # Whether this is a new iTerm2 instance is decided by the supervisor from
+    # iTerm2's pid. Do not second-guess it by counting windows: after a reboot
+    # iTerm2 often reopens several windows of its own, and requiring a single
+    # empty one would suppress the prompt in exactly the case that matters.
+    if allow_restore and plan_mod.should_prompt(snapshot, config):
         gate.clear()
         try:
             await prompt_and_restore(connection, snapshot, config)
@@ -416,24 +425,3 @@ async def main(connection, store: Store | None = None, config: Config | None = N
             gate.set()
 
     await capture_loop(connection, store, config, gate)
-
-
-async def _launch_is_fresh(connection) -> bool:
-    """True only if iTerm2 looks freshly started, not mid-session.
-
-    Guards against re-running a restore when the script is merely reloaded
-    while the user already has work open.
-    """
-    try:
-        app = await iterm2.async_get_app(connection)
-    except Exception:  # noqa: BLE001
-        return False
-    windows = list(app.terminal_windows)
-    if len(windows) > 1:
-        return False
-    if not windows:
-        return True
-    tabs = list(windows[0].tabs)
-    if len(tabs) != 1:
-        return False
-    return len(list(model.iter_nodes(await capture_node(tabs[0].root)))) == 1

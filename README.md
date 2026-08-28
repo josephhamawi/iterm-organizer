@@ -18,26 +18,61 @@ terminal along with the memory of what you were doing.
 ## Install
 
 ```bash
-git clone <this repo> ~/Development/iterm-organizer
 cd ~/Development/iterm-organizer
 ./install.sh
 ```
 
-Then restart iTerm2. The first launch offers to download iTerm2's Python
-runtime; accept it. After that the organizer starts automatically with iTerm2.
-
-`install.sh` writes three things and nothing else:
+That is the whole install. It creates a private virtualenv, writes a launchd
+agent, and starts it immediately - iTerm2 does not need to be restarted, and
+iTerm2's own Python runtime is never involved.
 
 | Path | Purpose |
 | --- | --- |
 | `~/.iterm-organizer/config.toml` | your settings (never overwritten if it exists) |
-| `~/Library/Application Support/iTerm2/Scripts/AutoLaunch/iterm_organizer.py` | 10-line shim that runs the code from this repo |
-| `~/.local/bin/iterm-organizer` | CLI wrapper |
+| `~/.iterm-organizer/` | snapshots, state, logs |
+| `~/Library/LaunchAgents/com.rami.iterm-organizer.plist` | the agent |
+| `~/.local/bin/iterm-organizer` | CLI |
+| `<repo>/.venv` | private virtualenv |
 
-`./uninstall.sh` removes the shim and the CLI. Snapshots and config stay put.
+`./uninstall.sh` stops and removes the agent and the CLI. Snapshots and config
+stay put.
 
-The shim re-execs into the repo venv if iTerm2's bundled Python predates 3.11
-(no `tomllib`). It inherits iTerm2's auth cookie either way, so no dialog appears.
+## How it stays running
+
+launchd starts the agent at login with `KeepAlive`/`SuccessfulExit=false`:
+
+- iTerm2 quits or crashes, so our websocket closes and the process exits
+  non-zero; launchd restarts it and it waits for iTerm2 to come back
+- another instance already holds the lock, so the process exits **zero** and
+  launchd leaves it down rather than respawning in a loop
+
+An advisory `flock` on `~/.iterm-organizer/daemon.lock` guarantees one daemon at
+a time. The kernel drops it when the process dies, so a crash cannot leave a
+stale lock - which matters, since crashing is what this tool exists for.
+
+The plist sets `AssociatedBundleIdentifiers = com.googlecode.iterm2`. Without
+it the agent blocks forever: connecting needs an auth cookie that the iterm2
+library requests over AppleScript, and for an unattributed launchd job macOS
+raises a TCC Automation prompt that never surfaces. Attributing the agent to
+iTerm2's bundle lets the request through.
+
+## When it prompts
+
+Restore is offered **once per iTerm2 instance**, keyed on iTerm2's pid:
+
+- installing while you are working adopts the running instance and stays quiet
+- a daemon restart against the same iTerm2 never re-prompts
+- a genuinely new iTerm2 - after a reboot, a crash, or a manual relaunch -
+  prompts once
+
+Window counts are deliberately not used as a freshness signal. After a reboot
+iTerm2 often reopens windows of its own, and requiring a single empty window
+would suppress the prompt in exactly the case that matters.
+
+The prompt is also skipped when the snapshot is older than `stale_days` (7) or
+is trivial (a single pane in `$HOME` with nothing running). Set
+`restore_prompt = "auto"` to skip the dialog and restore straight away, or
+`"off"` to disable restore.
 
 ## Everyday use
 
@@ -50,8 +85,8 @@ iterm-organizer --restore ~/.iterm-organizer/sessions/20260827-141500.json
 tail -f ~/.iterm-organizer/organizer.log
 ```
 
-Running the CLI from a normal shell asks iTerm2 for permission the first time.
-The AutoLaunch daemon never does, because iTerm2 hands it a cookie directly.
+Running the CLI from a shell inside iTerm2 works without any prompt, because
+iTerm2 is already trusted to send Apple Events to itself.
 
 ## How commands are replayed
 
@@ -98,17 +133,6 @@ and is treated as such:
 Note that flags are replayed faithfully. If a pane was running
 `claude --dangerously-skip-permissions`, restore brings it back with that flag.
 
-## When it prompts
-
-At iTerm2 launch, only if all of the following hold:
-
-- a snapshot exists and is newer than `stale_days` (7)
-- it is not trivial (a single pane sitting in `$HOME` with nothing running)
-- iTerm2 looks freshly started rather than mid-session, so reloading the script
-  while you are working never triggers a restore
-
-Set `restore_prompt = "auto"` to skip the prompt, or `"off"` to disable restore.
-
 ## Design
 
 `daemon.py` holds every iTerm2 API call. Everything with logic in it is pure and
@@ -121,6 +145,8 @@ tested without iTerm2 running:
 | `config.py` | config loading and validation |
 | `plan.py` | snapshot to an ordered list of restore actions |
 | `daemon.py` | iTerm2 glue only |
+| `lock.py` | single-instance advisory lock |
+| `supervisor.py` | process lifecycle, iTerm2 pid tracking, restore gating |
 
 Snapshots are written to a temp file and `os.replace`d, with the previous
 version kept alongside, so a crash mid-write cannot leave you without a
@@ -128,6 +154,18 @@ readable snapshot. An empty snapshot is never written over a good one.
 
 The full design document is in
 `docs/superpowers/specs/2026-08-27-iterm-organizer-design.md`.
+
+## Troubleshooting
+
+```bash
+launchctl print gui/$UID/com.rami.iterm-organizer   # is it running?
+tail -f ~/.iterm-organizer/organizer.log            # what is it doing?
+cat ~/.iterm-organizer/launchd.err.log              # did it fail to start?
+```
+
+If the log stops after `iterm2 module loaded` and never reaches `starting`, the
+agent is blocked on the AppleScript cookie: check that
+`AssociatedBundleIdentifiers` is still present in the plist.
 
 ## Tests
 
