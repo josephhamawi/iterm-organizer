@@ -126,8 +126,13 @@ iTerm Organizer.app/Contents/
   MacOS/iTermOrganizer     launcher: picks an interpreter, dispatches
   Resources/app/           the package
   Resources/vendor/        iterm2, websockets, protobuf
-  Resources/AppIcon.icns
+  Resources/AppIcon.icns   drawn by packaging/make_icon.py at build time
 ```
+
+The bundle is signed ad-hoc (`codesign --sign -`). It is built on the machine
+it runs on and never distributed, so there is no Developer ID involved; the
+signature is there so Gatekeeper treats it as a sealed app rather than a loose
+folder of scripts.
 
 Inside the package, everything that carries logic is separated from the iTerm2
 API so it can be tested without iTerm2 running:

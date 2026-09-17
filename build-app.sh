@@ -33,7 +33,7 @@ rm -rf "$CONTENTS/Resources/vendor/bin"
 cp "$REPO/packaging/launcher.sh" "$CONTENTS/MacOS/iTermOrganizer"
 chmod +x "$CONTENTS/MacOS/iTermOrganizer"
 
-# 4. Icon.
+# 4. Icon, rendered from packaging/make_icon.py at every size in the iconset.
 python3 "$REPO/packaging/make_icon.py" "$CONTENTS/Resources/AppIcon.icns"
 
 # 5. Info.plist.
@@ -61,7 +61,15 @@ with open(sys.argv[1], "wb") as fh:
     plistlib.dump(plist, fh)
 PYEOF
 
-# 6. Finder-friendly installers and documentation.
+# 6. Ad-hoc code signature. Nothing here needs a Developer ID - the app never
+#    leaves this machine - but a sealed bundle keeps Gatekeeper quiet and gives
+#    the automation permission prompt a stable app to attach to.
+codesign --force --sign - --identifier com.rami.itermorganizer \
+    --timestamp=none "$APP" >/dev/null 2>&1 || {
+    echo "  warning: could not sign the bundle; it will still run" >&2
+}
+
+# 7. Finder-friendly installers and documentation.
 cp "$REPO/packaging/Install.command" "$DEST/Install.command"
 cp "$REPO/packaging/Uninstall.command" "$DEST/Uninstall.command"
 chmod +x "$DEST/Install.command" "$DEST/Uninstall.command"
@@ -70,9 +78,13 @@ for doc in HOW-TO-USE CONFIGURATION TROUBLESHOOTING HOW-IT-WORKS; do
     cp "$REPO/docs/app/$doc.md" "$DEST/docs/$doc.md"
 done
 
-# Make Finder pick up the new icon rather than a cached generic one.
+# Make Finder show the new icon instead of a cached one.
 touch "$APP"
+/usr/bin/touch "$DEST"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$APP" >/dev/null 2>&1 || true
 
 echo "built:"
 echo "  $APP"
 du -sh "$APP" | sed 's/^/  size: /'
+codesign -dv "$APP" 2>&1 | sed -n 's/^Signature=/  signature: /p'
