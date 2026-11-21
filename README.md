@@ -79,6 +79,7 @@ Uninstall with `./uninstall.sh`. It stops and removes the agent and the CLI. You
 | `~/.iterm-organizer/config.toml` | your settings (never overwritten if it exists) |
 | `~/.iterm-organizer/` | snapshots, state, logs |
 | `~/Library/LaunchAgents/com.rami.iterm-organizer.plist` | the agent |
+| `~/Library/LaunchAgents/com.rami.iterm-organizer.menu.plist` | the menu bar item |
 | `~/.local/bin/iterm-organizer` | CLI |
 
 ## Everyday use
@@ -143,6 +144,8 @@ launchd starts the agent at login with `KeepAlive` / `SuccessfulExit=false`:
 
 An advisory `flock` on `~/.iterm-organizer/daemon.lock` guarantees one daemon at a time. The kernel drops it when the process dies, so a crash cannot leave a stale lock. That matters, since crashing is what this tool exists for.
 
+The menu bar item runs as a second launchd job so it stays up while the daemon comes and goes, and `ProcessType` is `Adaptive` rather than `Background`: the agent has user-facing work to do at login, when the machine is busiest, and background priority throttled it into taking minutes to get a prompt up.
+
 The plist sets `AssociatedBundleIdentifiers = com.googlecode.iterm2`. Without it the agent blocks forever: connecting needs an auth cookie that the iterm2 library requests over AppleScript, and for an unattributed launchd job macOS raises a TCC Automation prompt that never surfaces. Attributing the agent to iTerm2's bundle lets the request through.
 
 ## When it prompts
@@ -161,6 +164,20 @@ The prompt is skipped when the snapshot is older than `stale_days` (7) or is tri
 
 ## Design
 
+```mermaid
+flowchart LR
+    launchd["launchd<br/>RunAtLoad + KeepAlive"] --> sup["supervisor.py<br/>lock, instance identity"]
+    launchd --> menu["menu bar item<br/>(Swift)"]
+    sup --> daemon["daemon.py<br/>the only iTerm2 API calls"]
+    daemon <--> iterm["iTerm2<br/>Python API socket"]
+    daemon --> capture["capture every 60s"]
+    capture --> store[("~/.iterm-organizer<br/>snapshot.json + sessions/")]
+    store --> plan["plan.py<br/>snapshot to restore actions"]
+    plan --> daemon
+    store -. pending offer .-> menu
+    menu -. --restore .-> plan
+```
+
 `daemon.py` holds every iTerm2 API call. Everything with logic in it is pure and tested without iTerm2 running.
 
 | Module | Responsibility |
@@ -172,6 +189,8 @@ The prompt is skipped when the snapshot is older than `stale_days` (7) or is tri
 | `daemon.py` | iTerm2 glue only |
 | `lock.py` | single-instance advisory lock |
 | `supervisor.py` | process lifecycle, iTerm2 pid tracking, restore gating |
+| `agent.py` | launchd job definitions, install/uninstall, status |
+| `packaging/menubar/main.swift` | the menu bar item (no logic of its own; calls the CLI) |
 
 Snapshots are written to a temp file and `os.replace`d, with the previous version kept alongside, so a crash mid-write cannot leave you without a readable snapshot. An empty snapshot is never written over a good one.
 
@@ -187,6 +206,14 @@ cat ~/.iterm-organizer/launchd.err.log              # did it fail to start?
 
 If the log stops after `iterm2 module loaded` and never reaches `starting`, the agent is blocked on the AppleScript cookie. Check that `AssociatedBundleIdentifiers` is still present in the plist.
 
+If a restore prompt never appears, check whether two copies of iTerm2 are installed:
+
+```bash
+ps -axo pid=,comm= | grep '/MacOS/iTerm2$'
+```
+
+The cookie request resolves iTerm2 by bundle id, so with two copies it can connect to - and show its alert in - the copy you are not using. The agent aims at the running copy via `IT2_APP_PATH` and reports the clash in `--status`, but one copy is still the tidier answer.
+
 More: [`docs/app/TROUBLESHOOTING.md`](docs/app/TROUBLESHOOTING.md).
 
 ## Tests
@@ -196,7 +223,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest iterm2
 .venv/bin/python -m pytest
 ```
 
-184 tests, no iTerm2 instance required.
+204 tests, no iTerm2 instance required.
 
 ## Requirements
 
@@ -206,7 +233,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest iterm2
 
 ## Contributing
 
-Issues and pull requests are welcome. The logic modules are pure and unit-tested, so most changes can be verified without iTerm2 running at all.
+Issues and pull requests are welcome. The logic modules are pure and unit-tested, so most changes can be verified without iTerm2 running at all. See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout, conventions, and the one rule that keeps this maintainable.
 
 ## License
 
