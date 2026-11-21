@@ -275,6 +275,23 @@ def clear_offer(store: Store) -> None:
         write_state(store, state)
 
 
+def _run_forever(coro, retry: bool = False) -> None:
+    import iterm2
+
+    iterm2.run_forever(coro, retry=retry)
+
+
+def connect_forever(coro) -> None:
+    """Connect and run ``coro``, without the library's internal retry loop.
+
+    That loop never returns, so a process started while one iTerm2 was running
+    would keep aiming IT2_APP_PATH at it forever - including after it quit and
+    a different copy took its place. Failing fast instead lets launchd restart
+    us, and the new process re-reads ps and re-aims.
+    """
+    _run_forever(coro, retry=False)
+
+
 def setup_logging(store: Store) -> None:
     store.ensure()
     handler = logging.handlers.RotatingFileHandler(
@@ -350,7 +367,7 @@ def run() -> int:
         await daemon.main(connection, store=store, config=config, allow_restore=allow)
 
     try:
-        iterm2.run_forever(entry, retry=True)
+        connect_forever(entry)
     except SystemExit:
         log.info("iTerm2 connection closed")
     except Exception as exc:  # noqa: BLE001

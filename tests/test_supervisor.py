@@ -400,3 +400,23 @@ def test_app_target_env_left_alone_when_nothing_is_running(monkeypatch):
     monkeypatch.delenv("IT2_APP_PATH", raising=False)
     assert supervisor.target_iterm_app(None) is False
     assert "IT2_APP_PATH" not in os.environ
+
+
+def test_connect_does_not_retry_inside_the_process(monkeypatch, tmp_path):
+    """Each connection attempt must start from a fresh process.
+
+    The library's own retry loop never returns, so IT2_APP_PATH - read once at
+    startup from ps - would stay pinned to an iTerm2 that has since quit. Let
+    the attempt fail, exit, and let launchd start us again (ThrottleInterval
+    gives the backoff); the new process re-reads ps and re-aims.
+    """
+    calls = {}
+
+    class FakeIterm2:
+        @staticmethod
+        def run_forever(coro, retry=False):
+            calls["retry"] = retry
+
+    monkeypatch.setattr(supervisor, "_run_forever", FakeIterm2.run_forever)
+    supervisor.connect_forever(lambda connection: None)
+    assert calls["retry"] is False
