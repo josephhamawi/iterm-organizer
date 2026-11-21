@@ -289,16 +289,49 @@ async def _alert(connection, title: str, subtitle: str, buttons: list[str]) -> i
     return index if 0 <= index < len(buttons) else -1
 
 
-async def prompt_and_restore(connection, snapshot: Snapshot, config: Config) -> None:
+async def _bring_to_front(connection) -> None:
+    """Make iTerm2 the active app before putting a modal alert on it.
+
+    iTerm2 shows API alerts app-modally without activating itself. When the
+    connection belongs to an iTerm2 that is not frontmost - which is what
+    happens when a second copy of iTerm2 is installed and LaunchServices
+    launches that one for the cookie request - the dialog opens behind every
+    other window and the user never learns a restore was offered.
+    """
+    try:
+        app = await iterm2.async_get_app(connection)
+        await app.async_activate()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not bring iTerm2 forward (%s)", exc)
+
+
+async def prompt_and_restore(
+    connection, snapshot: Snapshot, config: Config, store: Store | None = None
+) -> None:
     total_panes = model.count_panes(snapshot)
     age = _describe_age(time.time() - snapshot.created_at)
     subtitle = (
         f"{len(snapshot.windows)} window(s), {total_panes} pane(s), saved {age}."
     )
 
+    # Record the offer before showing it. An alert that is never answered -
+    # because it opened behind other windows, or because iTerm2 went away -
+    # would otherwise vanish without a trace, and the menu bar item would have
+    # nothing to re-offer.
+    if store is not None:
+        from . import supervisor
+
+        supervisor.record_offer(
+            store,
+            windows=len(snapshot.windows),
+            panes=total_panes,
+            created_at=snapshot.created_at,
+        )
+
     if config.restore_prompt == "auto":
         choice = 0
     else:
+        await _bring_to_front(connection)
         choice = await _alert(
             connection,
             "Restore your previous terminal sessions?",
@@ -306,8 +339,12 @@ async def prompt_and_restore(connection, snapshot: Snapshot, config: Config) -> 
             ["Restore all", "Choose…", "Skip"],
         )
 
-    if choice < 0 or choice == 2:
-        log.info("restore declined or unavailable")
+    if choice < 0:
+        log.info("restore prompt unavailable; offer kept for the menu bar item")
+        return
+    if choice == 2:
+        log.info("restore declined")
+        _clear_offer(store)
         return
 
     only: list[int] | None = None
@@ -326,10 +363,13 @@ async def prompt_and_restore(connection, snapshot: Snapshot, config: Config) -> 
                 only.append(index)
         if not only:
             log.info("no windows selected")
+            _clear_offer(store)
             return
 
     restore_plan = plan_mod.build_plan(snapshot, config, only_windows=only)
+    _clear_offer(store)
     if restore_plan.is_empty:
+        log.info("nothing restorable in the snapshot")
         return
     errors = await realize(connection, restore_plan)
     for warning in restore_plan.warnings:
@@ -343,6 +383,14 @@ async def prompt_and_restore(connection, snapshot: Snapshot, config: Config) -> 
             "\n".join(restore_plan.warnings + errors)[:900],
             ["OK"],
         )
+
+
+def _clear_offer(store: Store | None) -> None:
+    if store is None:
+        return
+    from . import supervisor
+
+    supervisor.clear_offer(store)
 
 
 def _window_summary(window: Window, limit: int = 3) -> str:
@@ -374,6 +422,32 @@ def _describe_age(seconds: float) -> str:
 # --------------------------------------------------------------------------
 
 
+# Substrings that mean the websocket is gone rather than that one capture
+# went wrong. websockets raises ConnectionClosedError with "no close frame
+# received or sent"; the asyncio layer under it can surface a reset instead.
+_DISCONNECTED = (
+    "no close frame",
+    "connection closed",
+    "connection reset",
+    "broken pipe",
+)
+
+
+def is_disconnected(exc: BaseException) -> bool:
+    """Whether ``exc`` means the iTerm2 connection died.
+
+    A capture that fails for its own reasons (a full disk, an API hiccup) is
+    worth retrying. A dead websocket is not: every later capture will fail the
+    same way, so the process has to end and let launchd reconnect it.
+    """
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, EOFError)):
+        return True
+    if type(exc).__name__.startswith("ConnectionClosed"):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _DISCONNECTED)
+
+
 async def capture_loop(connection, store: Store, config: Config, gate: asyncio.Event):
     while True:
         await asyncio.sleep(config.snapshot_interval)
@@ -388,6 +462,12 @@ async def capture_loop(connection, store: Store, config: Config, gate: asyncio.E
                     model.count_panes(snap),
                 )
         except Exception as exc:  # noqa: BLE001
+            if is_disconnected(exc):
+                # Returning hands control back to run_forever, which raises out
+                # of the dead dispatch task; the supervisor then exits non-zero
+                # and launchd starts us again against the next iTerm2.
+                log.info("iTerm2 connection closed (%s); exiting to reconnect", exc)
+                return
             log.error("capture failed: %s", exc)
 
 
@@ -418,7 +498,7 @@ async def main(
     if allow_restore and plan_mod.should_prompt(snapshot, config):
         gate.clear()
         try:
-            await prompt_and_restore(connection, snapshot, config)
+            await prompt_and_restore(connection, snapshot, config, store=store)
         except Exception as exc:  # noqa: BLE001
             log.error("restore failed: %s", exc)
         finally:

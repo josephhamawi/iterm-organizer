@@ -30,7 +30,38 @@ grep connected ~/.iterm-organizer/organizer.log | tail -3
 
 - `restore=already handled` means it considered this the same iTerm2 it had
   already dealt with. Restore is offered once per iTerm2 instance.
-- `restore=offered` means it did ask, so the dialog was shown and dismissed.
+- `restore=offered` means it did ask. The dialog was shown - though not
+  necessarily where you could see it; read the next section.
+
+The menu bar item is the backstop. An offer that was made and never answered
+stays there under **Restore N window(s) from HH:MM** until you take it or
+dismiss it, so a dialog you missed costs you nothing.
+
+## The dialog opened somewhere I could not see it
+
+Almost always two copies of iTerm2 installed - typically one in
+`/Applications` and one in `~/Applications`.
+
+The agent gets its API cookie by asking for iTerm2 by bundle id, and
+LaunchServices resolves that id to exactly one of the copies, launching it if
+it is not already running. The agent then connects to that copy and shows its
+alert there. If the copy you actually use is the other one, the prompt opens
+in a background app with no windows of its own and never comes forward.
+
+Check:
+
+```bash
+ps -axo pid=,comm= | grep '/MacOS/iTerm2$'
+osascript -e 'tell application "Finder" to return POSIX path of (application file id "com.googlecode.iterm2" as alias)'
+```
+
+More than one line from the first command means this is your problem;
+`--status` reports it too. Keep one copy, quit the other, and relaunch iTerm2
+from the copy you kept.
+
+The agent now activates iTerm2 before showing the alert, which brings the
+dialog to the front even in this situation, but the two copies will still
+fight over which one your restored windows are built in.
 
 Your session is not lost either way:
 

@@ -121,3 +121,31 @@ def test_applescript_escaping(raw, expected):
     """A snapshot path or error text must not be able to break out of the
     AppleScript string literal."""
     assert agent._as_applescript(raw) == expected
+
+
+# --- menu bar helper ------------------------------------------------------
+
+
+def test_menu_plist_runs_the_helper_binary():
+    d = agent.menu_plist_dict("/Applications/X.app/Contents/MacOS/XMenu")
+    assert d["ProgramArguments"] == ["/Applications/X.app/Contents/MacOS/XMenu"]
+    assert d["Label"] == agent.MENU_LABEL
+    assert d["RunAtLoad"] is True
+
+
+def test_menu_plist_stays_down_after_an_explicit_quit():
+    """Quit in the menu exits 0. KeepAlive must not drag it back up."""
+    d = agent.menu_plist_dict("/x")
+    assert d["KeepAlive"] == {"SuccessfulExit": False}
+
+
+def test_menu_program_sits_next_to_the_daemon_program():
+    assert agent.menu_program("/Applications/X.app/Contents/MacOS/iTermOrganizer") == (
+        "/Applications/X.app/Contents/MacOS/iTermOrganizerMenu"
+    )
+
+
+def test_plist_does_not_run_the_daemon_at_background_priority():
+    """Background ProcessType throttles CPU and disk, and this job has to get
+    a restore prompt up at login, when the machine is busiest."""
+    assert agent.plist_dict("/x", "/tmp/s")["ProcessType"] != "Background"

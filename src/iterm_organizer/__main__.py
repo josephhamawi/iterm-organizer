@@ -127,11 +127,31 @@ def cmd_restore(store: Store, path: str | None) -> int:
             )
 
     iterm2.run_until_complete(entry)
+    if status["code"] == 0:
+        # Taking the restore by hand answers any offer the agent left standing,
+        # so the menu bar item should stop advertising it.
+        from . import supervisor
+
+        supervisor.clear_offer(store)
     return status["code"]
 
 
 def cmd_status(store: Store) -> int:
+    from . import supervisor
+
     print(agent.describe_status(agent.status(store)))
+    offer = supervisor.read_offer(store)
+    if offer:
+        print(
+            f"A restore is waiting: {offer.get('windows', 0)} window(s), "
+            f"{offer.get('panes', 0)} pane(s)."
+        )
+    warning = supervisor.duplicate_warning(
+        supervisor.running_bundles(supervisor._ps_output()),
+        supervisor.resolved_bundle(),
+    )
+    if warning:
+        print(f"WARNING: {warning}")
     return 0
 
 

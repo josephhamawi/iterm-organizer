@@ -299,3 +299,104 @@ def test_socket_fallback_distinguishes_relaunches(tmp_path, monkeypatch):
     first = supervisor.instance_key()
     os.utime(sock, (1_700_009_999, 1_700_009_999))
     assert supervisor.instance_key() != first
+
+
+# --- duplicate installs ---------------------------------------------------
+
+TWO_COPIES = """\
+  476 /Users/you/Applications/iTerm.app/Contents/MacOS/iTerm2
+ 1073 /Users/you/Library/Application Support/iTerm2/iTermServer-3.6.11
+ 2026 /Applications/iTerm.app/Contents/MacOS/iTerm2
+"""
+
+
+def test_running_bundles_lists_each_distinct_iterm_copy():
+    assert supervisor.running_bundles(TWO_COPIES) == [
+        "/Users/you/Applications/iTerm.app",
+        "/Applications/iTerm.app",
+    ]
+
+
+def test_running_bundles_ignores_helpers_and_duplicte_pids():
+    assert supervisor.running_bundles(PS_OUTPUT) == ["/Applications/iTerm.app"]
+
+
+def test_duplicate_warning_names_both_copies_and_the_one_that_wins():
+    """Two installed copies is the failure that hides the restore prompt: the
+    cookie request resolves the bundle id through LaunchServices, so the agent
+    connects to a copy the user may not be using, and the alert opens there."""
+    warning = supervisor.duplicate_warning(
+        ["/Users/you/Applications/iTerm.app", "/Applications/iTerm.app"],
+        resolved="/Applications/iTerm.app",
+    )
+    assert warning
+    assert "/Users/you/Applications/iTerm.app" in warning
+    assert "/Applications/iTerm.app" in warning
+
+
+def test_no_duplicate_warning_for_a_single_copy():
+    assert supervisor.duplicate_warning(
+        ["/Applications/iTerm.app"], resolved="/Applications/iTerm.app"
+    ) == ""
+
+
+# --- pending restore offer ------------------------------------------------
+
+
+def test_offer_round_trips_through_state(tmp_path):
+    """An alert the user never answered must leave a trace. Without it the
+    offer dies with the dialog and cannot be asked for later."""
+    store = Store(str(tmp_path))
+    store.ensure()
+    assert supervisor.read_offer(store) is None
+    supervisor.record_offer(store, windows=6, panes=9, created_at=1234.0)
+    offer = supervisor.read_offer(store)
+    assert offer["windows"] == 6
+    assert offer["panes"] == 9
+    assert offer["created_at"] == 1234.0
+
+
+def test_clearing_the_offer_keeps_the_rest_of_state(tmp_path):
+    store = Store(str(tmp_path))
+    store.ensure()
+    supervisor.mark_restore_done(store, "pid:1")
+    supervisor.record_offer(store, windows=2, panes=2, created_at=5.0)
+    supervisor.clear_offer(store)
+    assert supervisor.read_offer(store) is None
+    assert supervisor.read_state(store)["restored_for_instance"] == "pid:1"
+
+
+def test_clear_offer_is_a_no_op_without_one(tmp_path):
+    """--restore clears the offer on the way out; it must not rewrite state
+    when there was nothing pending."""
+    store = Store(str(tmp_path))
+    store.ensure()
+    supervisor.clear_offer(store)
+    assert not os.path.exists(supervisor.state_path(store))
+
+
+def test_preferred_bundle_is_the_first_running_copy():
+    """ps lists by ascending pid, so the copy started at login comes first -
+    the one whose windows the user is looking at, rather than one launched
+    on demand by the cookie request."""
+    assert supervisor.preferred_bundle(TWO_COPIES) == "/Users/you/Applications/iTerm.app"
+
+
+def test_preferred_bundle_is_none_when_iterm_is_not_running():
+    assert supervisor.preferred_bundle("1200 /usr/bin/python3\n") is None
+
+
+def test_app_target_env_points_the_cookie_request_at_that_copy(monkeypatch):
+    """Without IT2_APP_PATH the iterm2 library asks for application "iTerm2",
+    which LaunchServices resolves to one specific copy and launches it. With
+    two copies installed that is how the agent ends up connected to - and
+    prompting in - an iTerm2 the user is not using."""
+    monkeypatch.delenv("IT2_APP_PATH", raising=False)
+    assert supervisor.target_iterm_app("/Users/you/Applications/iTerm.app") is True
+    assert os.environ["IT2_APP_PATH"] == "/Users/you/Applications/iTerm.app"
+
+
+def test_app_target_env_left_alone_when_nothing_is_running(monkeypatch):
+    monkeypatch.delenv("IT2_APP_PATH", raising=False)
+    assert supervisor.target_iterm_app(None) is False
+    assert "IT2_APP_PATH" not in os.environ

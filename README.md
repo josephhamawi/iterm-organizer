@@ -10,7 +10,7 @@ Snapshots your terminal layout every 60 seconds. Offers to rebuild all of it the
 
 ![macOS](https://img.shields.io/badge/macOS-11%2B-black?logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-184%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 <img src="docs/assets/screenshot-hero.png" width="760" alt="iTerm Organizer restore prompt">
@@ -38,6 +38,19 @@ Say yes and your terminal comes back the way you left it.
 - **Memory.** Pane titles plus a one-line banner showing directory, git branch, and the command that was running
 - **Work in progress.** Long-running dev processes, under an allowlist you control
 - **Claude Code sessions.** Resumed with `claude --continue`
+
+## The menu bar item
+
+The app also installs a small menu bar item. It shows when the last snapshot
+was taken, whether the agent is running, and - if a restore was offered and
+never answered - keeps that offer available:
+
+- **Restore N window(s) from HH:MM** - take the offer you missed
+- **Restore last session** - rebuild the newest snapshot on demand
+- **Snapshot now**, **Show details**, **Open log**
+
+It is built only when a Swift toolchain is present at build time; without one
+the rest of the app works unchanged.
 
 ## Install
 

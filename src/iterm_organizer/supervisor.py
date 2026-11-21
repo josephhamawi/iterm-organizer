@@ -22,6 +22,7 @@ from .model import Store, write_atomic
 log = logging.getLogger("iterm_organizer")
 
 ITERM_SUFFIX = "/MacOS/iTerm2"
+ITERM_BUNDLE_ID = "com.googlecode.iterm2"
 
 # launchd KeepAlive is configured with SuccessfulExit=false: exit 0 means
 # "stay down", anything else means "bring me back".
@@ -47,6 +48,18 @@ def parse_iterm_pid(ps_output: str) -> int | None:
     return None
 
 
+def _ps_output(timeout: float = 15.0) -> str:
+    try:
+        return subprocess.run(
+            ["/bin/ps", "-axo", "pid=,comm="],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def iterm_pid(attempts: int = 3, timeout: float = 15.0) -> int | None:
     """iTerm2's pid, retrying because login is the worst moment to ask.
 
@@ -70,6 +83,91 @@ def iterm_pid(attempts: int = 3, timeout: float = 15.0) -> int | None:
         if attempt + 1 < attempts:
             time.sleep(1.0)
     return None
+
+
+def running_bundles(ps_output: str) -> list[str]:
+    """Every distinct iTerm2 .app bundle with a running main process.
+
+    Order is the order ``ps`` reported them. Helper processes (iTermServer,
+    pidinfo.xpc) are excluded by matching the main executable path.
+    """
+    bundles: list[str] = []
+    for line in ps_output.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        comm = parts[1].strip()
+        if not comm.endswith(ITERM_SUFFIX):
+            continue
+        bundle = comm[: -len("/Contents" + ITERM_SUFFIX)]
+        if bundle and bundle not in bundles:
+            bundles.append(bundle)
+    return bundles
+
+
+def duplicate_warning(bundles: list[str], resolved: str | None) -> str:
+    """A warning when more than one copy of iTerm2 is running.
+
+    This is the failure that hides the restore prompt. The API cookie is
+    requested over AppleScript against the bundle id, which LaunchServices
+    resolves to one specific copy - launching it if it is not already up. The
+    agent then connects to that copy and shows its alert there, which may not
+    be the copy whose windows the user is looking at.
+    """
+    if len(bundles) < 2:
+        return ""
+    listed = ", ".join(bundles)
+    target = resolved or "unknown"
+    return (
+        f"{len(bundles)} copies of iTerm2 are running ({listed}). "
+        f"The connection and the restore prompt go to {target}, which may not "
+        f"be the one you use. Keep one copy installed."
+    )
+
+
+def preferred_bundle(ps_output: str) -> str | None:
+    """The iTerm2 copy to talk to: the first one ``ps`` reports.
+
+    ps lists in ascending pid order, so this is the copy that started
+    earliest - the one launched at login, with the user's windows in it -
+    rather than one that the cookie request itself launched on demand.
+    """
+    bundles = running_bundles(ps_output)
+    return bundles[0] if bundles else None
+
+
+def target_iterm_app(bundle: str | None) -> bool:
+    """Aim the cookie request at ``bundle`` by exporting IT2_APP_PATH.
+
+    The iterm2 library otherwise asks AppleScript for application "iTerm2",
+    which LaunchServices resolves by bundle id to one installed copy and
+    launches it if needed. With two copies installed that routinely picks the
+    copy the user is not using: the connection, and the restore prompt with
+    it, then land in an app with no windows and no way to be noticed.
+    """
+    if not bundle:
+        return False
+    os.environ["IT2_APP_PATH"] = bundle
+    return True
+
+
+def resolved_bundle() -> str | None:
+    """The iTerm2 copy LaunchServices resolves the bundle id to."""
+    try:
+        out = subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                'tell application "Finder" to return POSIX path of '
+                f'(application file id "{ITERM_BUNDLE_ID}" as alias)',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.rstrip("/") or None
 
 
 SOCKET_PATH = os.path.expanduser(
@@ -154,6 +252,29 @@ def mark_restore_done(store: Store, instance: str | None) -> None:
     write_state(store, state)
 
 
+def record_offer(store: Store, *, windows: int, panes: int, created_at: float) -> None:
+    """Remember that a restore was offered but not yet answered."""
+    state = read_state(store)
+    state["pending_offer"] = {
+        "windows": windows,
+        "panes": panes,
+        "created_at": created_at,
+        "offered_at": time.time(),
+    }
+    write_state(store, state)
+
+
+def read_offer(store: Store) -> dict | None:
+    offer = read_state(store).get("pending_offer")
+    return offer if isinstance(offer, dict) else None
+
+
+def clear_offer(store: Store) -> None:
+    state = read_state(store)
+    if state.pop("pending_offer", None) is not None:
+        write_state(store, state)
+
+
 def setup_logging(store: Store) -> None:
     store.ensure()
     handler = logging.handlers.RotatingFileHandler(
@@ -197,6 +318,13 @@ def run() -> int:
         return 0
 
     config = load_config_or_defaults(store)
+    ps_output = _ps_output()
+    bundle = preferred_bundle(ps_output)
+    if target_iterm_app(bundle):
+        log.info("talking to %s", bundle)
+    warning = duplicate_warning(running_bundles(ps_output), resolved_bundle())
+    if warning:
+        log.warning(warning)
     log.info(
         "starting (interval=%ss, iterm2 pid=%s)",
         config.snapshot_interval,

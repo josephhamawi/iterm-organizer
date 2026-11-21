@@ -16,6 +16,8 @@ from . import model
 from .model import Store
 
 LABEL = "com.rami.iterm-organizer"
+MENU_LABEL = "com.rami.iterm-organizer.menu"
+MENU_PROGRAM = "iTermOrganizerMenu"
 
 # Connecting to the iTerm2 API needs an auth cookie that the iterm2 library
 # requests over AppleScript. For a launchd job with no bundle identity that
@@ -43,10 +45,41 @@ def plist_dict(program: str, store_root: str, label: str = LABEL) -> dict[str, A
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 20,
-        "ProcessType": "Background",
+        # Not "Background": that caps CPU and throttles disk I/O, and this job
+        # has user-facing work to do at login - importing its dependencies and
+        # getting a restore prompt up before the user has moved on. Under a
+        # heavy login it took minutes to reach the prompt.
+        "ProcessType": "Adaptive",
         "StandardOutPath": os.path.join(store_root, "launchd.out.log"),
         "StandardErrorPath": os.path.join(store_root, "launchd.err.log"),
     }
+
+
+def menu_program(program: str) -> str:
+    """The menu bar binary that ships beside the daemon entry point."""
+    return os.path.join(os.path.dirname(program), MENU_PROGRAM)
+
+
+def menu_plist_dict(program: str, label: str = MENU_LABEL) -> dict[str, Any]:
+    """The launchd job for the menu bar item.
+
+    Separate from the daemon on purpose: the daemon must be free to exit and
+    be restarted whenever iTerm2 goes away, while the menu bar item has to
+    stay put - it is what the user reaches for when a restore prompt was
+    missed. KeepAlive is SuccessfulExit=false so Quit in the menu sticks.
+    """
+    return {
+        "Label": label,
+        "ProgramArguments": [program],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ThrottleInterval": 20,
+        "LimitLoadToSessionType": "Aqua",
+    }
+
+
+def menu_plist_xml(program: str, label: str = MENU_LABEL) -> bytes:
+    return plistlib.dumps(menu_plist_dict(program, label))
 
 
 def plist_xml(program: str, store_root: str, label: str = LABEL) -> bytes:
@@ -63,29 +96,52 @@ def domain(label: str = LABEL) -> str:
     return f"gui/{os.getuid()}/{label}"
 
 
+def _load(path: str, label: str) -> subprocess.CompletedProcess:
+    _launchctl("bootout", domain(label))  # ignore failure: may not be loaded
+    result = _launchctl("bootstrap", f"gui/{os.getuid()}", path)
+    _launchctl("enable", domain(label))
+    return result
+
+
 def install(program: str, store: Store | None = None, label: str = LABEL) -> None:
-    """Write the plist and (re)load the agent."""
+    """Write the plist and (re)load the agent, plus the menu bar item."""
     store = store or Store()
     store.ensure()
     path = plist_path(label)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     model.write_atomic(path, plist_xml(program, store.root, label).decode("utf-8"))
-    _launchctl("bootout", domain(label))  # ignore failure: may not be loaded
-    result = _launchctl("bootstrap", f"gui/{os.getuid()}", path)
+    result = _load(path, label)
     if result.returncode != 0:
         raise RuntimeError(
             f"launchctl bootstrap failed ({result.returncode}): "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
-    _launchctl("enable", domain(label))
+    install_menu(program)
+
+
+def install_menu(program: str, label: str = MENU_LABEL) -> bool:
+    """Install the menu bar item, if this build carries one.
+
+    build-app.sh only compiles it when a Swift toolchain is present, so an
+    installation without it is normal rather than an error.
+    """
+    helper = menu_program(program)
+    if not os.path.exists(helper):
+        return False
+    path = plist_path(label)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    model.write_atomic(path, menu_plist_xml(helper, label).decode("utf-8"))
+    _load(path, label)
+    return True
 
 
 def uninstall(label: str = LABEL) -> None:
-    _launchctl("bootout", domain(label))
-    try:
-        os.unlink(plist_path(label))
-    except FileNotFoundError:
-        pass
+    for name in (label, MENU_LABEL):
+        _launchctl("bootout", domain(name))
+        try:
+            os.unlink(plist_path(name))
+        except FileNotFoundError:
+            pass
 
 
 def parse_launchctl_print(output: str) -> dict[str, str]:

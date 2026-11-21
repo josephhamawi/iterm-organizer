@@ -310,3 +310,89 @@ def test_realize_reports_a_failed_attach(monkeypatch):
     monkeypatch.setattr(daemon.iterm2, "async_get_app", boom)
     errors = run(daemon.realize("conn", make_plan(pane_node())))
     assert errors == ["could not attach to iTerm2: no connection"]
+
+
+# --- disconnection --------------------------------------------------------
+
+
+class ClosedError(Exception):
+    """Stands in for websockets.exceptions.ConnectionClosedError."""
+
+
+def test_is_disconnected_recognises_a_closed_websocket():
+    assert daemon.is_disconnected(ClosedError("no close frame received or sent"))
+    assert daemon.is_disconnected(ConnectionResetError("peer reset"))
+
+
+def test_is_disconnected_ignores_ordinary_capture_failures():
+    assert not daemon.is_disconnected(OSError("[Errno 28] No space left on device"))
+    assert not daemon.is_disconnected(ValueError("bad variable"))
+
+
+def test_capture_loop_returns_when_the_connection_dies(monkeypatch, tmp_path):
+    """A dead websocket must end the loop so launchd can restart the daemon.
+
+    Swallowing it leaves the process alive against a socket that will never
+    answer, and no restore is ever offered again.
+    """
+    async def dead(connection):
+        raise ClosedError("no close frame received or sent")
+
+    monkeypatch.setattr(daemon, "capture", dead)
+    store = model.Store(str(tmp_path))
+    config = Config()
+    config.snapshot_interval = 0
+    gate = asyncio.Event()
+    gate.set()
+    run(asyncio.wait_for(daemon.capture_loop(None, store, config, gate), timeout=2))
+
+
+def test_capture_loop_keeps_going_after_a_transient_failure(monkeypatch, tmp_path):
+    calls = {"n": 0}
+
+    async def flaky(connection):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("[Errno 28] No space left on device")
+        raise ClosedError("no close frame received or sent")
+
+    monkeypatch.setattr(daemon, "capture", flaky)
+    store = model.Store(str(tmp_path))
+    config = Config()
+    config.snapshot_interval = 0
+    gate = asyncio.Event()
+    gate.set()
+    run(asyncio.wait_for(daemon.capture_loop(None, store, config, gate), timeout=2))
+    assert calls["n"] == 3
+
+
+# --- prompt visibility ----------------------------------------------------
+
+
+def test_prompt_activates_iterm2_before_showing_the_alert(monkeypatch, tmp_path):
+    """The alert is app-modal. If iTerm2 is not frontmost - and with two
+    installed copies the one holding the API connection often is not - the
+    dialog opens behind everything and the user never sees it."""
+    order = []
+
+    class FakeApp:
+        async def async_activate(self, raise_all_windows=True, ignoring_other_apps=True):
+            order.append("activate")
+
+    async def fake_get_app(connection):
+        return FakeApp()
+
+    async def fake_alert(connection, title, subtitle, buttons):
+        order.append("alert")
+        return 2  # Skip
+
+    monkeypatch.setattr(daemon.iterm2, "async_get_app", fake_get_app)
+    monkeypatch.setattr(daemon, "_alert", fake_alert)
+    snap = Snapshot(created_at=1.0)
+    snap.windows.append(
+        Window(window_id="1", frame=None, tabs=[Tab(title="", root=Pane(
+            session_id="s", cwd=f"{HOME}/Development/app", title="", profile="Default",
+            job_name="", job_pid=None, argv="", git_branch=""))])
+    )
+    run(daemon.prompt_and_restore(None, snap, Config(), store=model.Store(str(tmp_path))))
+    assert order == ["activate", "alert"]
