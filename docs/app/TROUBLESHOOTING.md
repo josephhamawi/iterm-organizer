@@ -80,6 +80,28 @@ iterm-organizer --install "$(command -v iterm-organizer)"
 
 Click **Skip** to confirm the dialog works without opening anything.
 
+## "There was a problem connecting to iTerm2"
+
+The library's own advice here is misleading: the Python API setting is
+usually on and iTerm2 is usually running. Check whether anything is actually
+listening on the socket:
+
+```bash
+python3 -c "import socket,os;s=socket.socket(socket.AF_UNIX);s.connect(os.path.expanduser('~/Library/Application Support/iTerm2/private/socket'))"
+```
+
+`ConnectionRefusedError` means the socket file outlived the iTerm2 that bound
+it - which is what happens when a second copy of iTerm2 created it and then
+quit. No client can connect until iTerm2 is restarted:
+
+```bash
+osascript -e 'quit app "iTerm"'
+open -a /Applications/iTerm.app
+```
+
+`--restore`, `--snapshot-now` and the agent all check this before connecting
+and report it in these words.
+
 ## The log stops after "iterm2 module loaded"
 
 The agent is stuck asking iTerm2 for a connection cookie. That request goes

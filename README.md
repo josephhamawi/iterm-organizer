@@ -10,7 +10,7 @@ Snapshots your terminal layout every 60 seconds. Offers to rebuild all of it the
 
 ![macOS](https://img.shields.io/badge/macOS-11%2B-black?logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-199%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-208%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 <img src="docs/assets/screenshot-hero.png" width="760" alt="iTerm Organizer restore prompt">
@@ -223,7 +223,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest iterm2
 .venv/bin/python -m pytest
 ```
 
-204 tests, no iTerm2 instance required.
+208 tests, no iTerm2 instance required.
 
 ## Requirements
 

@@ -175,6 +175,38 @@ SOCKET_PATH = os.path.expanduser(
 )
 
 
+API_SOCKET_PATH = os.path.expanduser(
+    "~/Library/Application Support/iTerm2/private/socket"
+)
+
+API_DEAD_HINT = (
+    "iTerm2's Python API is not accepting connections. The socket file exists "
+    "but nothing is listening on it, which happens when the iTerm2 that "
+    "created it has quit - with two copies installed, that can be a copy you "
+    "never saw. Quit and relaunch iTerm2 to rebind it."
+)
+
+
+def api_listening(path: str = API_SOCKET_PATH) -> bool:
+    """Whether anything is accepting connections on iTerm2's API socket.
+
+    The iterm2 library reports a refused connection with generic advice about
+    enabling the Python API, which sends you looking in the wrong place: the
+    setting is on, the socket is there, and the listener is simply gone.
+    """
+    import socket as socket_mod
+
+    probe = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+    probe.settimeout(2.0)
+    try:
+        probe.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def socket_instance() -> str | None:
     """Fallback instance identity: iTerm2 recreates its API socket at launch."""
     try:
@@ -365,6 +397,13 @@ def run() -> int:
             "offered" if allow else "already handled",
         )
         await daemon.main(connection, store=store, config=config, allow_restore=allow)
+
+    if not api_listening():
+        # Nothing to connect to. Say so once and let launchd try again after
+        # ThrottleInterval, rather than filling the log with library errors.
+        log.warning(API_DEAD_HINT)
+        lock.release()
+        return EXIT_RECONNECT
 
     try:
         connect_forever(entry)

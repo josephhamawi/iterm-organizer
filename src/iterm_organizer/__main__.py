@@ -47,6 +47,8 @@ def cmd_list(store: Store) -> int:
 
 def cmd_dry_run(store: Store, path: str | None) -> int:
     config = _load_config(store)
+    if not _api_ready():
+        return 1
     if path:
         snap = store.load_file(os.path.expanduser(path))
         note = "" if snap else f"cannot read {path}"
@@ -66,12 +68,24 @@ def cmd_dry_run(store: Store, path: str | None) -> int:
     return 0
 
 
+def _api_ready() -> bool:
+    """Fail with a usable message rather than the library's generic one."""
+    from . import supervisor
+
+    if supervisor.api_listening():
+        return True
+    print(supervisor.API_DEAD_HINT, file=sys.stderr)
+    return False
+
+
 def cmd_snapshot_now(store: Store) -> int:
     import iterm2
 
     from . import daemon
 
     config = _load_config(store)
+    if not _api_ready():
+        return 1
     status = {"code": 1}
 
     async def entry(connection):
@@ -93,6 +107,8 @@ def cmd_restore(store: Store, path: str | None) -> int:
     from . import daemon
 
     config = _load_config(store)
+    if not _api_ready():
+        return 1
     if path:
         snap = store.load_file(os.path.expanduser(path))
     else:

@@ -177,6 +177,8 @@ def test_restore_decision_is_made_after_connecting(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "iterm_pid", lambda *a, **k: None)
     monkeypatch.setattr(supervisor, "instance_key", lambda: "pid:523")
     monkeypatch.setattr(supervisor, "Store", lambda: RealStore(str(tmp_path)))
+    # run() refuses to connect when nothing listens on iTerm2's API socket.
+    monkeypatch.setattr(supervisor, "api_listening", lambda *a, **k: True)
 
     seen = {}
 
@@ -211,6 +213,8 @@ def test_no_restore_when_reconnecting_to_the_same_instance(tmp_path, monkeypatch
     monkeypatch.setattr(supervisor, "iterm_pid", lambda *a, **k: 523)
     monkeypatch.setattr(supervisor, "instance_key", lambda: "pid:523")
     monkeypatch.setattr(supervisor, "Store", lambda: RealStore(str(tmp_path)))
+    # run() refuses to connect when nothing listens on iTerm2's API socket.
+    monkeypatch.setattr(supervisor, "api_listening", lambda *a, **k: True)
 
     seen = {}
 
@@ -420,3 +424,36 @@ def test_connect_does_not_retry_inside_the_process(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "_run_forever", FakeIterm2.run_forever)
     supervisor.connect_forever(lambda connection: None)
     assert calls["retry"] is False
+
+
+# --- API socket preflight -------------------------------------------------
+
+
+def test_api_socket_is_reported_missing_when_there_is_no_file(tmp_path):
+    assert supervisor.api_listening(str(tmp_path / "absent")) is False
+
+
+def test_api_socket_is_reported_dead_when_nothing_listens():
+    """A socket file outlives the process that bound it. iTerm2 leaves one
+    behind when the copy that created it quits, and every connection then
+    fails with ECONNREFUSED until iTerm2 is restarted."""
+    import shutil
+    import socket as socket_mod
+    import tempfile
+
+    # Not tmp_path: pytest's directories blow past the 104 byte AF_UNIX limit.
+    root = tempfile.mkdtemp(dir="/tmp")
+    path = os.path.join(root, "socket")
+    server = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+    server.bind(path)
+    server.listen(1)
+    try:
+        assert supervisor.api_listening(path) is True
+        server.close()
+        assert supervisor.api_listening(path) is False
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_api_hint_names_the_cure():
+    assert "relaunch" in supervisor.API_DEAD_HINT.lower()
